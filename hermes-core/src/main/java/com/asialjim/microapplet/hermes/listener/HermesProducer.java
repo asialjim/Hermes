@@ -54,25 +54,25 @@ public class HermesProducer implements JvmOnlyListener<Object> {
      */
     @Getter
     private final HermesService serviceName;
-    
+
     /**
      * Hermes仓库，用于事件存储和发送
      * Hermes repository for event storage and sending
      */
     private final HermesRepository hermesRepository;
-    
+
     /**
      * 会话标识供应商
      * Session ID supplier
      */
     private final Supplier<String> sessionSupplier;
-    
+
     /**
      * 链路标识供应商
      * Trace ID supplier
      */
     private final Supplier<String> traceSupplier;
-    
+
     /**
      * Hermes集群，用于事件中继
      * Hermes cluster for event relay
@@ -86,13 +86,13 @@ public class HermesProducer implements JvmOnlyListener<Object> {
      * @param serviceName      生产者服务名称
      *                         Producer service name
      * @param hermesRepository Hermes仓库
-     *                        Hermes repository
+     *                         Hermes repository
      * @param sessionSupplier  会话标识供应商
-     *                        Session ID supplier
+     *                         Session ID supplier
      * @param traceSupplier    链路标识供应商
-     *                        Trace ID supplier
+     *                         Trace ID supplier
      * @param cluster          事件中继集群
-     *                        Event relay cluster
+     *                         Event relay cluster
      * @since 1.0.0
      */
     public HermesProducer(@Nonnull HermesService serviceName,
@@ -112,7 +112,7 @@ public class HermesProducer implements JvmOnlyListener<Object> {
      * Get interested event types
      *
      * @return 事件类型集合，包含Object类
-     *         Set of event types, contains Object class
+     * Set of event types, contains Object class
      * @since 1.0.0
      */
     @Override
@@ -125,7 +125,7 @@ public class HermesProducer implements JvmOnlyListener<Object> {
      * Whether it is a global listener
      *
      * @return 总是返回true，表示这是一个全局监听器
-     *         Always returns true, indicating this is a global listener
+     * Always returns true, indicating this is a global listener
      * @since 1.0.0
      */
     @Override
@@ -138,7 +138,7 @@ public class HermesProducer implements JvmOnlyListener<Object> {
      * Execute core event processing method
      *
      * @param hermes Hermes事件对象
-     *              Hermes event object
+     *               Hermes event object
      * @since 1.0.0
      */
     @Override

@@ -21,6 +21,7 @@ import lombok.experimental.Accessors;
 
 import java.io.Serial;
 import java.io.Serializable;
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.HashSet;
 import java.util.Optional;
@@ -143,4 +144,5 @@ public final class Hermes<E> implements Serializable {
      * Current status of the event, used to track event processing progress
      */
     private String status;
+    private Duration trigAfter;
 }

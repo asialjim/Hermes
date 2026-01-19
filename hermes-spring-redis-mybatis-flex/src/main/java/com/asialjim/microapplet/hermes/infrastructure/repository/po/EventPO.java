@@ -32,8 +32,10 @@ import org.apache.commons.lang3.StringUtils;
 
 import java.io.Serial;
 import java.io.Serializable;
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.Arrays;
+import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -127,6 +129,8 @@ public class EventPO implements Serializable {
     @Column(onInsertValue = "now()", onUpdateValue = "now()")
     private LocalDateTime updateTime;
 
+    private LocalDateTime trigAfter;
+
     /**
      * 将 EventPO 转换为 Hermes 对象
      * <p>
@@ -137,7 +141,6 @@ public class EventPO implements Serializable {
      * 
      * @param hermes EventPO 对象
      * @return Hermes 对象
-     * @version 1.0.0
      * @since 1.0.0
      */
     public static Hermes<?> to(EventPO hermes) {
@@ -161,6 +164,19 @@ public class EventPO implements Serializable {
 
         String code = hermes.getStatus().getCode();
         po.setStatus(code);
+        LocalDateTime trigAfter = hermes.getTrigAfter();
+        if (Objects.nonNull(trigAfter)){
+            LocalDateTime now = LocalDateTime.now();
+            Duration duration = Duration.between(now,trigAfter);
+            // 触发时间在当前时间之后
+            if (!duration.isZero() && duration.isPositive()){
+                po.setTrigAfter(duration);
+            }
+            // 已经到达触发时间
+            else {
+                po.setTrigAfter(null);
+            }
+        }
         return po;
     }
 
@@ -174,7 +190,6 @@ public class EventPO implements Serializable {
      * 
      * @param hermes Hermes 对象
      * @return EventPO 对象
-     * @version 1.0.0
      * @since 1.0.0
      */
     public static EventPO from(Hermes<?> hermes) {
@@ -189,6 +204,13 @@ public class EventPO implements Serializable {
         po.setSucceedServiceNum(0);
         po.setFailedServiceNum(0);
         po.setCreateTime(hermes.getSendTime());
+
+        Duration trigAfter = hermes.getTrigAfter();
+        LocalDateTime sendTime = hermes.getSendTime();
+        if (Objects.nonNull(trigAfter) && !trigAfter.isZero()) {
+            LocalDateTime trigTime = sendTime.plusNanos(trigAfter.getNano());
+            po.setTrigAfter(trigTime);
+        }
         return po;
     }
 }

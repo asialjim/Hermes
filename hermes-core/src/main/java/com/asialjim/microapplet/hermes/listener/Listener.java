@@ -28,6 +28,7 @@ import org.slf4j.LoggerFactory;
 
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
@@ -36,11 +37,11 @@ import java.util.concurrent.TimeUnit;
  * 顶级接口，声明为监听器
  * Top-level interface, declared as a listener
  *
+ * @param <E> 事件数据类型
+ *            Event data type
  * @author <a href="mailto:asialjim@qq.com">Asial Jim</a>
  * @version 1.0.0
  * @since 2026-01-08
- * @param <E> 事件数据类型
- *            Event data type
  */
 public interface Listener<E> extends EventListener, Comparable<Listener<E>> {
     /**
@@ -48,7 +49,7 @@ public interface Listener<E> extends EventListener, Comparable<Listener<E>> {
      * Get logger instance
      *
      * @return 日志记录器实例
-     *         Logger instance
+     * Logger instance
      * @since 2026-01-08
      */
     default Logger log() {
@@ -60,7 +61,7 @@ public interface Listener<E> extends EventListener, Comparable<Listener<E>> {
      * Get the execution order of the listener
      *
      * @return 执行顺序，值越小优先级越高
-     *         Execution order, smaller value means higher priority
+     * Execution order, smaller value means higher priority
      * @since 2026-01-08
      */
     default int getOrder() {
@@ -74,7 +75,7 @@ public interface Listener<E> extends EventListener, Comparable<Listener<E>> {
      * @param o 另一个监听器实例
      *          Another listener instance
      * @return 比较结果，负数表示当前监听器优先级更高
-     *         Comparison result, negative number means current listener has higher priority
+     * Comparison result, negative number means current listener has higher priority
      * @since 2026-01-08
      */
     @Override
@@ -87,7 +88,7 @@ public interface Listener<E> extends EventListener, Comparable<Listener<E>> {
      * Service name that the listener belongs to
      *
      * @return 服务名称实例
-     *         Service name instance
+     * Service name instance
      * @since 2026-01-08
      */
     HermesService getServiceName();
@@ -112,9 +113,7 @@ public interface Listener<E> extends EventListener, Comparable<Listener<E>> {
      * @since 2026-01-08
      */
     default void onEvent(E event) {
-        StopWatch stopWatch = new StopWatch();
-        Hermes<E> hermes = wrapHermes(event);
-        onHermes(event, stopWatch, hermes);
+        onEvent(null,event);
     }
 
     /**
@@ -128,10 +127,20 @@ public interface Listener<E> extends EventListener, Comparable<Listener<E>> {
      * @since 2026-01-08
      */
     default void onEvent(String id, E event) {
+        onEventAfter(id, event, null);
+    }
+
+
+    default void onEventAfter(E event, Duration after) {
+        onEventAfter(null, event, after);
+    }
+
+    default void onEventAfter(String id, E event, Duration after) {
         StopWatch stopWatch = new StopWatch();
-        Hermes<E> hermes = wrapHermes(event).setId(id);
+        Hermes<E> hermes = wrapHermes(event).setId(id).setTrigAfter(after);
         onHermes(event, stopWatch, hermes);
     }
+
 
     /**
      * 将事件包装为 Hermes
@@ -140,7 +149,7 @@ public interface Listener<E> extends EventListener, Comparable<Listener<E>> {
      * @param event 事件对象
      *              Event object
      * @return 包装后的Hermes事件
-     *         Wrapped Hermes event
+     * Wrapped Hermes event
      * @since 2026-01-08
      */
     private Hermes<E> wrapHermes(E event) {
@@ -261,7 +270,7 @@ public interface Listener<E> extends EventListener, Comparable<Listener<E>> {
      *              Wrapped Hermes event
      * @since 2026-01-08
      */
-    default void onAfter(Hermes<E> event){
+    default void onAfter(Hermes<E> event) {
         // do nothing here default
     }
 
@@ -270,7 +279,7 @@ public interface Listener<E> extends EventListener, Comparable<Listener<E>> {
      * Get the set of event types that the current listener is interested in
      *
      * @return 事件类型集合
-     *         Set of event types
+     * Set of event types
      * @since 2026-01-08
      */
     default Set<Type> eventType() {
@@ -301,7 +310,7 @@ public interface Listener<E> extends EventListener, Comparable<Listener<E>> {
      * </pre>
      *
      * @return 是否为全局监听器
-     *         Whether it is a global listener
+     * Whether it is a global listener
      * @since 2026-01-08
      */
     default boolean globalListener() {
@@ -350,7 +359,7 @@ public interface Listener<E> extends EventListener, Comparable<Listener<E>> {
      * @param rawType 原始类型对象
      *                Raw type object
      * @return 是否为Listener类型
-     *         Whether it is a Listener type
+     * Whether it is a Listener type
      * @since 2026-01-08
      */
     private static boolean candidateType(Type rawType) {
@@ -393,4 +402,5 @@ public interface Listener<E> extends EventListener, Comparable<Listener<E>> {
             genericInterfaces(types, superclass);
         }
     }
+
 }

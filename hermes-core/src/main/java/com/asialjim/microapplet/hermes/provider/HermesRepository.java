@@ -152,4 +152,10 @@ public interface HermesRepository extends HermesSender {
     void succeedEvent(String eventId, String application);
 
     void pingPong(HermesService hermesService);
+
+    /**
+     * 处理延时事件
+     * @since 2026/1/19
+     */
+    void delayedHermesSub();
 }

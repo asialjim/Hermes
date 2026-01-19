@@ -26,6 +26,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
 
 import java.lang.reflect.Type;
+import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -175,6 +176,13 @@ public class EventBus {
             listener.onEvent(event);
         else
             listener.onEvent(id, event);
+    }
+
+    private static <E> void doPushAfter(String id, E event, Listener<E> listener, Duration after){
+        if (StringUtils.isBlank(id))
+            listener.onEventAfter(event,after);
+        else
+            listener.onEventAfter(id, event,after);
     }
 
     /**

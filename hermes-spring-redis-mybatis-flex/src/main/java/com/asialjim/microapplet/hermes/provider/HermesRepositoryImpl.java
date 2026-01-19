@@ -30,6 +30,7 @@ import org.apache.commons.lang3.StringUtils;
 import org.springframework.aop.framework.AopContext;
 import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.ZSetOperations;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
@@ -37,6 +38,10 @@ import org.springframework.util.CollectionUtils;
 
 import java.lang.reflect.Type;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
 
@@ -71,6 +76,8 @@ import java.util.concurrent.TimeUnit;
 @Slf4j
 @Component
 public class HermesRepositoryImpl implements HermesRepository {
+    private static final ZoneOffset zoneOffset = ZoneOffset.of(ZoneOffset.systemDefault().getId());
+
     /**
      * 订阅者服务
      */
@@ -446,7 +453,13 @@ public class HermesRepositoryImpl implements HermesRepository {
     @Override
     public void doSend(Hermes<?> hermes) {
         Set<String> sendTo = hermes.getSendTo();
-        this.consumptionMapperService.send(hermes.getId(), sendTo);
+        Duration trigAfter = hermes.getTrigAfter();
+        LocalDateTime sendTime = hermes.getSendTime();
+        LocalDateTime trigTime = sendTime;
+        if (Objects.nonNull(trigAfter)) {
+            trigTime = sendTime.plusNanos(trigAfter.getNano());
+        }
+        this.consumptionMapperService.send(hermes.getId(), sendTo, trigTime);
     }
 
     /**
@@ -469,10 +482,37 @@ public class HermesRepositoryImpl implements HermesRepository {
         if (Objects.isNull(hermes) || !hermes.global())
             return;
 
+        Duration trigAfter = hermes.getTrigAfter();
+        // 非延时事件
+        if (Objects.isNull(trigAfter) || trigAfter.isZero() || trigAfter.isNegative()) {
+            // 直接发布到redis
+            push2redis(hermes.getId(), hermes.getType());
+            return;
+        }
+
+        // 发布到延时队列
+        send2DelayedQueue(hermes, trigAfter);
+    }
+
+    private void send2DelayedQueue(Hermes<?> hermes, Duration trigAfter) {
+        LocalDateTime executeTime = hermes.getSendTime().plusNanos(trigAfter.getNano());
+
+        // 处理延时事件
+        final String delayedHermesTypes = "hermes:delayed:types";
+        // 向   delayedHermesTypes   set 追加一个 事件类型
+        stringRedisTemplate.opsForSet().add(delayedHermesTypes, hermes.getType());
+
+        final String delayedHermesRedisKey = "hermes:delayed:" + hermes.getType();
+        // 向 delayedHermesRedisKey  zset  追加一个 hermesid, 分数为执行时间时间戳的秒值
+        long epochSecond = executeTime.toInstant(zoneOffset).getEpochSecond();
+        stringRedisTemplate.opsForZSet().add(delayedHermesRedisKey, hermes.getId(), epochSecond);
+    }
+
+    private void push2redis(String id, String type) {
         // 针对性发布事件
-        final String topic = "hermes:id:" + hermes.getType();
+        final String topic = "hermes:id:" + type;
         final byte[] topicBytes = topic.getBytes(StandardCharsets.UTF_8);
-        final byte[] bodyBytes = hermes.getId().getBytes(StandardCharsets.UTF_8);
+        final byte[] bodyBytes = id.getBytes(StandardCharsets.UTF_8);
 
         final RedisCallback<Long> callback = link -> link.publish(topicBytes, bodyBytes);
 
@@ -480,5 +520,78 @@ public class HermesRepositoryImpl implements HermesRepository {
 
         if (log.isDebugEnabled())
             log.info("Hermes Publish Result: {}", res);
+    }
+
+    @Override
+    public void delayedHermesSub() {
+        final String delayedHermesTypes = "hermes:delayed:types";
+        // 获取所有具有延时事件的事件类型
+        Set<String> members = stringRedisTemplate.opsForSet().members(delayedHermesTypes);
+
+        if (Objects.isNull(members) || members.isEmpty())
+            return;
+
+        long now = Instant.now().getEpochSecond();
+        Set<String> willDeletedMembers = new HashSet<>(members);
+
+        for (String member : members) {
+            final String delayedHermesRedisKey = "hermes:delayed:" + member;
+            if (removeIfEmptyZSet(member, delayedHermesRedisKey, willDeletedMembers))
+                continue;
+
+            // 将到达执行时间的事件转移到执行队列
+            transDelayedHermesToExecuteQueue(delayedHermesRedisKey, member, now);
+
+            // zset 出现空值，标记好该type，供后续删除
+            removeIfEmptyZSet(member, delayedHermesRedisKey, willDeletedMembers);
+        }
+
+        // 删除延时事件集合为空的事件类型
+        Object[] array = willDeletedMembers.toArray();
+        stringRedisTemplate.opsForSet().remove(delayedHermesTypes, array);
+    }
+
+    private boolean removeIfEmptyZSet(String member, String delayedHermesRedisKey, Set<String> willDeletedMembers) {
+        Long count = stringRedisTemplate.opsForZSet().count(delayedHermesRedisKey, 0, Double.MAX_VALUE);
+        if (Objects.nonNull(count) && count == 0) {
+            // 搜集 集合已经为空的事件类型
+            willDeletedMembers.add(member);
+            return true;
+        }
+        return false;
+    }
+
+    public void transDelayedHermesToExecuteQueue(String key, String type, double maxScore) {
+        ZSetOperations<String, String> zSetOps = stringRedisTemplate.opsForZSet();
+        Set<String> allMembers = new HashSet<>();
+
+        // 分页查询，避免一次取出过多数据
+        int pageSize = 100;
+        long offset = 0;
+
+        while (true) {
+            Set<ZSetOperations.TypedTuple<String>> page = zSetOps.rangeByScoreWithScores(key, Double.NEGATIVE_INFINITY, maxScore, offset, pageSize);
+
+            if (page == null || page.isEmpty()) {
+                break;
+            }
+
+            // 收集符合条件的元素
+            for (ZSetOperations.TypedTuple<String> tuple : page) {
+                if (tuple.getScore() != null && tuple.getScore() < maxScore) {
+                    String id = tuple.getValue();
+                    if (StringUtils.isNotBlank(id)) {
+                        allMembers.add(id);
+                        push2redis(id, type);
+                    }
+                }
+            }
+
+            offset += pageSize;
+        }
+
+        // 批量删除
+        if (!CollectionUtils.isEmpty(allMembers))
+            zSetOps.remove(key, (Object) allMembers.toArray(new String[0]));
     }
 }

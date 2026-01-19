@@ -20,6 +20,7 @@ import com.asialjim.microapplet.hermes.infrastructure.repository.po.ConsumptionC
 import com.asialjim.microapplet.hermes.infrastructure.repository.po.ConsumptionPO;
 import com.mybatisflex.core.service.IService;
 
+import java.time.LocalDateTime;
 import java.util.Set;
 
 /**
@@ -98,7 +99,6 @@ public interface ConsumptionMapperService
      * @param serviceName 服务名称
      * @param code 状态码
      * @param err 错误信息
-     * @version 1.0.0
      * @since 1.0.0
      */
     void log(String id, String serviceName, String code, String err);
@@ -113,10 +113,9 @@ public interface ConsumptionMapperService
      * 
      * @param id 事件ID
      * @param sendTo 服务名称集合
-     * @version 1.0.0
      * @since 1.0.0
      */
-    void send(String id, Set<String> sendTo);
+    void send(String id, Set<String> sendTo,  LocalDateTime trigTime);
 
     /**
      * 标记事件正在处理中

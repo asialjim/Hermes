@@ -28,6 +28,7 @@ import org.apache.commons.lang3.StringUtils;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Repository;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
@@ -83,6 +84,7 @@ public class ConsumptionMapperServiceImpl
                 .select(ConsumptionPO::getEventId)
                 .where(ConsumptionPO::getSubscriber).eq(serviceName)
                 .where(ConsumptionPO::getStatus).le(ConsumptionStatus.PENDING.getId())
+                .where(ConsumptionPO::getNextTime).lt(LocalDateTime.now())
                 .oneAs(String.class);
     }
 
@@ -280,12 +282,13 @@ public class ConsumptionMapperServiceImpl
      * @since 1.0.0
      */
     @Override
-    public void send(String id, Set<String> sendTo) {
+    public void send(String id, Set<String> sendTo, LocalDateTime trigTime) {
         List<ConsumptionPO> collect = sendTo.stream()
                 .map(item -> new ConsumptionPO()
                         .setEventId(id)
                         .setSubscriber(item)
                         .setStatus(ConsumptionStatus.PENDING)
+                        .setNextTime(trigTime)
                 )
                 .toList();
 

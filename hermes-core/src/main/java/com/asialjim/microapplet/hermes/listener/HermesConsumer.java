@@ -89,12 +89,16 @@ public abstract class HermesConsumer {
         // 补偿消费
         eventReConsumption();
 
+        // 处理延时事件
+        delayedHermesSub();
+
         // 发送心跳
         pingPong();
 
         // 监听中间件
         listen2MQ(this::onHermesReceived);
     }
+
 
     /**
      * 停止消费者
@@ -154,6 +158,13 @@ public abstract class HermesConsumer {
         this.scheduler.scheduleAtFixedRate(
                 () -> this.hermesRepository.reConsumption(this.hermesService.serviceName()),
                 0, 2, TimeUnit.MINUTES);
+    }
+
+
+    protected void delayedHermesSub(){
+        this.scheduler.scheduleAtFixedRate(
+                () -> this.hermesRepository.delayedHermesSub(),
+                0, 1, TimeUnit.SECONDS);
     }
 
     /**

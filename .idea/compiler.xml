@@ -11,32 +11,18 @@
           <entry name="$MAVEN_REPOSITORY$/org/projectlombok/lombok/1.18.30/lombok-1.18.30.jar" />
           <entry name="$MAVEN_REPOSITORY$/org/projectlombok/lombok/1.18.30/lombok-1.18.30.jar" />
         </processorPath>
-        <module name="hermes-spring-demo" />
         <module name="hermes-spring-redis-mybatis-flex" />
         <module name="hermes-core" />
-        <module name="hermes-spring-producer-demo" />
-        <module name="hermes-spring-consumer-demo" />
+        <module name="hermes-spring-redis-mybatis-flex-producer-demo" />
+        <module name="hermes-spring-redis-mybatis-flex-consumer-demo" />
         <module name="hermes-spring" />
       </profile>
-      <profile name="Annotation profile for hermes-spring-redis-mybatis-flex-consumer-demo" enabled="true">
-        <sourceOutputDir name="target/generated-sources/annotations" />
-        <sourceTestOutputDir name="target/generated-test-sources/test-annotations" />
-        <outputRelativeToContentRoot value="true" />
-        <processorPath useClasspath="false">
-          <entry name="$MAVEN_REPOSITORY$/org/projectlombok/lombok/1.18.30/lombok-1.18.30.jar" />
-        </processorPath>
-        <module name="hermes-spring-redis-mybatis-flex-consumer-demo" />
-      </profile>
-      <profile name="Annotation profile for hermes-spring-redis-mybatis-flex-producer-demo" enabled="true">
-        <sourceOutputDir name="target/generated-sources/annotations" />
-        <sourceTestOutputDir name="target/generated-test-sources/test-annotations" />
-        <outputRelativeToContentRoot value="true" />
-        <processorPath useClasspath="false">
-          <entry name="$MAVEN_REPOSITORY$/org/projectlombok/lombok/1.18.30/lombok-1.18.30.jar" />
-        </processorPath>
-        <module name="hermes-spring-redis-mybatis-flex-producer-demo" />
-      </profile>
     </annotationProcessing>
+    <bytecodeTargetLevel>
+      <module name="hermes-spring-consumer-demo" target="21" />
+      <module name="hermes-spring-demo" target="21" />
+      <module name="hermes-spring-producer-demo" target="21" />
+    </bytecodeTargetLevel>
   </component>
   <component name="JavacSettings">
     <option name="ADDITIONAL_OPTIONS_OVERRIDE">
@@ -49,6 +35,7 @@
       <module name="hermes-spring-redis-mybatis-flex" options="-parameters" />
       <module name="hermes-spring-redis-mybatis-flex-consumer-demo" options="-parameters" />
       <module name="hermes-spring-redis-mybatis-flex-producer-demo" options="-parameters" />
+      <module name="hermes-zen-dependencies" options="-parameters" />
     </option>
   </component>
 </project>
