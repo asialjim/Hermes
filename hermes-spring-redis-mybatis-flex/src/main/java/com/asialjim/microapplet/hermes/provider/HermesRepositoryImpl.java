@@ -533,6 +533,7 @@ public class HermesRepositoryImpl implements HermesRepository {
 
     @Override
     public void delayedHermesSub() {
+        // 获取延迟事件类型集合的键
         final String delayedHermesTypes = "hermes:delayed:types";
         // 获取所有具有延时事件的事件类型
         Set<String> members = stringRedisTemplate.opsForSet().members(delayedHermesTypes);
@@ -540,45 +541,83 @@ public class HermesRepositoryImpl implements HermesRepository {
         if (Objects.isNull(members) || members.isEmpty())
             return;
 
+        // 当前时间戳（秒）
         long now = Instant.now().getEpochSecond();
+        // 记录需要删除的空事件类型
         Set<String> willDeletedMembers = new HashSet<>(members);
+        // 批量大小，限制单次处理的事件数量
+        int batchSize = 100;
 
+        // 遍历每种事件类型
         for (String member : members) {
             final String delayedHermesRedisKey = "hermes:delayed:" + member;
-
-            Set<String> ids = stringRedisTemplate.opsForZSet().rangeByScore(delayedHermesRedisKey, 0, now);
-            //push2redis(ids, member);
-
-            if (Objects.isNull(ids) || ids.isEmpty()){
+            
+            // 使用 Lua 脚本原子性地执行以下操作：
+            // 1. 获取到期事件（限制批次大小）
+            // 2. 删除到期事件
+            // 3. 检查队列是否为空
+            // Use Lua script to atomically execute the following operations:
+            // 1. Get expired events (with batch size limit)
+            // 2. Remove expired events
+            // 3. Check if the queue is empty
+            List<String> keys = Arrays.asList(delayedHermesTypes, delayedHermesRedisKey);
+            List<String> args = Arrays.asList(String.valueOf(now), String.valueOf(batchSize));
+            
+            List<Object> result = stringRedisTemplate.execute(
+                    new DefaultRedisScript<>(processDelayedEventsLuaScript, List.class),
+                    keys,
+                    args.toArray()
+            );
+            
+            // 处理Lua脚本返回结果
+            if (Objects.isNull(result) || result.size() < 3) {
                 continue;
             }
-
-            for (String id : ids) {
-                // 针对性发布事件
-                final String topic = "hermes:id:" + member;
-                final byte[] topicBytes = topic.getBytes(StandardCharsets.UTF_8);
-                final byte[] bodyBytes = id.getBytes(StandardCharsets.UTF_8);
-
-                final RedisCallback<Long> callback = link -> link.publish(topicBytes, bodyBytes);
-
-                final Long res = stringRedisTemplate.execute(callback);
-
-                if (log.isDebugEnabled())
-                    log.info("Hermes Publish Result: {}", res);
+            
+            // 获取到期事件ID列表
+            @SuppressWarnings("unchecked")
+            List<String> expiredEventIds = (List<String>) result.get(0);
+            
+            // 获取删除的事件数量
+            Long removedCount = (Long) result.get(1);
+            
+            // 获取剩余事件数量
+            Long remainingCount = (Long) result.get(2);
+            
+            // 如果有到期事件，则批量发布
+            if (!CollectionUtils.isEmpty(expiredEventIds)) {
+                // 将事件ID列表转换为逗号分隔的字符串
+                String eventIdsStr = String.join(",", expiredEventIds);
+                
+                // 使用 Lua 脚本批量发布事件
+                List<String> publishArgs = Arrays.asList("hermes:id:", member, eventIdsStr);
+                
+                Long publishedCount = stringRedisTemplate.execute(
+                        new DefaultRedisScript<>(batchPublishEventsLuaScript, Long.class),
+                        Collections.emptyList(),
+                        publishArgs.toArray()
+                );
+                
+                if (log.isDebugEnabled()) {
+                    log.debug("批量发布事件: 类型={}, 数量={}", member, publishedCount);
+                }
             }
-
-            if (!CollectionUtils.isEmpty(ids))
-                stringRedisTemplate.opsForZSet().remove(delayedHermesRedisKey, ids.toArray());
-
-            // zset 出现空值，标记好该type，供后续删除
-            Long count = stringRedisTemplate.opsForZSet().count(delayedHermesRedisKey, 0, Double.MAX_VALUE);
-            if (Objects.nonNull(count) && count == 0)
+            
+            // 如果队列为空，则标记该事件类型待删除
+            if (Objects.nonNull(remainingCount) && remainingCount == 0) {
                 willDeletedMembers.add(member);
+            }
         }
 
         // 删除延时事件集合为空的事件类型
-        Object[] array = willDeletedMembers.toArray();
-        stringRedisTemplate.opsForSet().remove(delayedHermesTypes, array);
+        if (!willDeletedMembers.isEmpty()) {
+            Object[] array = willDeletedMembers.toArray();
+            stringRedisTemplate.opsForSet().remove(delayedHermesTypes, array);
+            
+            if (log.isDebugEnabled()) {
+                log.debug("删除空的延迟事件类型: {}", Arrays.toString(array));
+            }
+        }
     }
 
 
