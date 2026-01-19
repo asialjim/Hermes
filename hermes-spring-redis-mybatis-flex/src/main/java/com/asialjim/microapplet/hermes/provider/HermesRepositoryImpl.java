@@ -132,6 +132,25 @@ public class HermesRepositoryImpl implements HermesRepository {
                 -- 返回过期的实例列表
                 return expired_instances
             """;
+    
+    // 添加延迟事件到队列的 Lua 脚本
+    // Add delayed event to queue Lua script
+    private static final String send2DelayedQueueLuaScript = """
+                -- 获取参数
+                local delayedTypesKey = KEYS[1]
+                local delayedQueueKey = KEYS[2]
+                local eventType = ARGV[1]
+                local eventId = ARGV[2]
+                local executeTime = tonumber(ARGV[3])
+                
+                -- 向延迟事件类型集合添加事件类型
+                redis.call('SADD', delayedTypesKey, eventType)
+                
+                -- 向延迟队列添加事件ID，分数为执行时间戳
+                redis.call('ZADD', delayedQueueKey, executeTime, eventId)
+                
+                return 1
+            """;
 
     /**
      * 标记事件正在被处理
@@ -549,13 +568,24 @@ public class HermesRepositoryImpl implements HermesRepository {
 
         // 处理延时事件
         final String delayedHermesTypes = "hermes:delayed:types";
-        // 向   delayedHermesTypes   set 追加一个 事件类型
-        stringRedisTemplate.opsForSet().add(delayedHermesTypes, hermes.getType());
-
         final String delayedHermesRedisKey = "hermes:delayed:" + hermes.getType();
-        // 向 delayedHermesRedisKey  zset  追加一个 hermesid, 分数为执行时间时间戳的秒值
+        // 计算执行时间的时间戳秒值
         long epochSecond = executeTime.toInstant(zoneOffset).getEpochSecond();
-        stringRedisTemplate.opsForZSet().add(delayedHermesRedisKey, hermes.getId(), epochSecond);
+        
+        // 使用 Lua 脚本原子性地执行两个操作：
+        // 1. 向延迟事件类型集合添加事件类型
+        // 2. 向延迟队列添加事件ID，分数为执行时间戳
+        // Use Lua script to atomically execute two operations:
+        // 1. Add event type to delayed event type set
+        // 2. Add event ID to delayed queue with score as execution timestamp
+        List<String> keys = Arrays.asList(delayedHermesTypes, delayedHermesRedisKey);
+        List<String> args = Arrays.asList(hermes.getType(), hermes.getId(), String.valueOf(epochSecond));
+        
+        stringRedisTemplate.execute(
+                new DefaultRedisScript<>(send2DelayedQueueLuaScript, Long.class),
+                keys,
+                args.toArray()
+        );
     }
 
 }
