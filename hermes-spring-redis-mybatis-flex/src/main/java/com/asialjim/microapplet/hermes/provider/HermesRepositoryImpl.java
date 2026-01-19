@@ -104,7 +104,7 @@ public class HermesRepositoryImpl implements HermesRepository {
     private HermesService hermesService;
 
     // hermes 心跳保持 lua 脚本
-    private static final String luaScript = """
+    private static final String pingPongScript = """
                 local hash_key = KEYS[1]
                 local instance_id = ARGV[1]
                 local expire_at = ARGV[2]
@@ -132,7 +132,68 @@ public class HermesRepositoryImpl implements HermesRepository {
                 -- 返回过期的实例列表
                 return expired_instances
             """;
-    
+
+    private static final String completeDelayedEventProcessScript = """
+            -- 完整的延迟事件处理脚本
+            -- Complete delayed event processing script
+            
+            -- 获取参数
+            local delayedTypesKey = KEYS[1]
+            local currentTime = tonumber(ARGV[1])
+            local batchSize = tonumber(ARGV[2])
+            local topicPrefix = ARGV[3]
+            
+            -- 结果存储
+            local results = {
+                publishedEvents = {},  -- 已发布的事件信息
+                emptyTypes = {}         -- 空的事件类型
+            }
+            
+            -- 获取所有延迟事件类型
+            local eventTypes = redis.call('SMEMBERS', delayedTypesKey)
+            
+            -- 处理每种事件类型
+            for i = 1, #eventTypes do
+                local eventType = eventTypes[i]
+                local delayedQueueKey = "hermes:delayed:" .. eventType
+            
+                -- 获取到期事件（限制批次大小）
+                local expiredEvents = redis.call('ZRANGEBYSCORE', delayedQueueKey, 0, currentTime, 'LIMIT', 0, batchSize)
+            
+                -- 删除到期事件
+                local removedCount = 0
+                if #expiredEvents > 0 then
+                    removedCount = redis.call('ZREM', delayedQueueKey, unpack(expiredEvents))
+            
+                    -- 发布事件
+                    local topic = topicPrefix .. eventType
+                    for j = 1, #expiredEvents do
+                        local publishResult = redis.call('PUBLISH', topic, expiredEvents[j])
+            
+                        -- 记录发布结果
+                        table.insert(results.publishedEvents, {
+                            type = eventType,
+                            id = expiredEvents[j],
+                            publishResult = publishResult
+                        })
+                    end
+                end
+            
+                -- 检查队列是否为空
+                local remainingCount = redis.call('ZCARD', delayedQueueKey)
+                if remainingCount == 0 then
+                    table.insert(results.emptyTypes, eventType)
+                end
+            end
+            
+            -- 删除空的事件类型
+            if #results.emptyTypes > 0 then
+                redis.call('SREM', delayedTypesKey, unpack(results.emptyTypes))
+            end
+            
+            -- 返回处理结果
+            return results""";
+
     // 添加延迟事件到队列的 Lua 脚本
     // Add delayed event to queue Lua script
     private static final String send2DelayedQueueLuaScript = """
@@ -142,13 +203,12 @@ public class HermesRepositoryImpl implements HermesRepository {
                 local eventType = ARGV[1]
                 local eventId = ARGV[2]
                 local executeTime = tonumber(ARGV[3])
-                
                 -- 向延迟事件类型集合添加事件类型
                 redis.call('SADD', delayedTypesKey, eventType)
-                
+            
                 -- 向延迟队列添加事件ID，分数为执行时间戳
                 redis.call('ZADD', delayedQueueKey, executeTime, eventId)
-                
+            
                 return 1
             """;
 
@@ -235,24 +295,14 @@ public class HermesRepositoryImpl implements HermesRepository {
         List<String> keys = Collections.singletonList(allInstance);
         List<String> args = Arrays.asList(instanceId, String.valueOf(expireAt), String.valueOf(now));
 
-        List<?> expiredInstanceSet = stringRedisTemplate.execute(
-                new DefaultRedisScript<>(luaScript, List.class),
-                keys,
-                args.toArray()
-        );
+        List<?> expiredInstanceSet = stringRedisTemplate.execute(new DefaultRedisScript<>(pingPongScript, List.class), keys, args.toArray());
 
         //noinspection ConstantValue
-        if (Objects.isNull(expiredInstanceSet))
-            return;
+        if (Objects.isNull(expiredInstanceSet)) return;
 
-        if (expiredInstanceSet.isEmpty())
-            return;
+        if (expiredInstanceSet.isEmpty()) return;
 
-        List<String> list = expiredInstanceSet.stream()
-                .filter(Objects::nonNull)
-                .filter(item -> item instanceof String)
-                .map(String::valueOf)
-                .toList();
+        List<String> list = expiredInstanceSet.stream().filter(Objects::nonNull).filter(item -> item instanceof String).map(String::valueOf).toList();
 
         this.subscriberMapperService.unRegisterInstance(list);
     }
@@ -292,8 +342,7 @@ public class HermesRepositoryImpl implements HermesRepository {
      */
     @Override
     public void register(Type type, Set<String> serviceNames) {
-        if (Objects.isNull(type) || CollectionUtils.isEmpty(serviceNames))
-            return;
+        if (Objects.isNull(type) || CollectionUtils.isEmpty(serviceNames)) return;
         String typeName = type.getTypeName();
         // 注册，将实例编号也同步注册
         String instanceId = this.hermesService.instanceId();
@@ -318,16 +367,12 @@ public class HermesRepositoryImpl implements HermesRepository {
     @Transactional
     public Hermes<?> pop(String serviceName) {
         String eventId = this.consumptionMapperService.pop(serviceName);
-        if (StringUtils.isBlank(eventId))
-            return null;
-        if (log.isDebugEnabled())
-            log.info("补偿消费事件编号：{}", eventId);
+        if (StringUtils.isBlank(eventId)) return null;
+        if (log.isDebugEnabled()) log.info("补偿消费事件编号：{}", eventId);
         EventPO hermesPO = this.eventMapperService.queryById(eventId);
-        if (Objects.isNull(hermesPO) || StringUtils.equals("-", hermesPO.getData()))
-            return null;
+        if (Objects.isNull(hermesPO) || StringUtils.equals("-", hermesPO.getData())) return null;
         Hermes<?> hermes = EventPO.to(hermesPO);
-        if (log.isDebugEnabled())
-            log.info("Pop {} result: {}", serviceName, hermes);
+        if (log.isDebugEnabled()) log.info("Pop {} result: {}", serviceName, hermes);
         this.consumptionMapperService.popped(eventId, serviceName);
         return hermes;
     }
@@ -351,14 +396,11 @@ public class HermesRepositoryImpl implements HermesRepository {
     @Override
     public Hermes<?> queryAvailableHermesByIdAndServiceName(String id, String serviceName) {
         boolean available = this.consumptionMapperService.eventIdAndServiceNameAvailable(id, serviceName);
-        if (!available)
-            return null;
+        if (!available) return null;
         EventPO hermesPO = this.eventMapperService.queryById(id);
-        if (Objects.isNull(hermesPO) || StringUtils.equals("-", hermesPO.getData()))
-            return null;
+        if (Objects.isNull(hermesPO) || StringUtils.equals("-", hermesPO.getData())) return null;
         Hermes<?> hermes = EventPO.to(hermesPO);
-        if (log.isDebugEnabled())
-            log.info("Available Hermes of {} for {} result: {}", id, serviceName, hermes);
+        if (log.isDebugEnabled()) log.info("Available Hermes of {} for {} result: {}", id, serviceName, hermes);
         return hermes;
     }
 
@@ -400,13 +442,11 @@ public class HermesRepositoryImpl implements HermesRepository {
      */
     @Override
     public void reConsumption(String serviceName) {
-        if (log.isDebugEnabled())
-            log.info("服务 {} 补偿消费Hermes......", serviceName);
+        if (log.isDebugEnabled()) log.info("服务 {} 补偿消费Hermes......", serviceName);
         HermesRepositoryImpl hermesRepository = (HermesRepositoryImpl) AopContext.currentProxy();
         Hermes<?> hermes;
         do {
-            if (log.isDebugEnabled())
-                log.info("补偿消费...");
+            if (log.isDebugEnabled()) log.info("补偿消费...");
             hermes = hermesRepository.doReConsumption(serviceName);
         } while (Objects.nonNull(hermes));
         log.info("服务 {} 补偿消费Hermes 结束!!!!!!", serviceName);
@@ -429,8 +469,7 @@ public class HermesRepositoryImpl implements HermesRepository {
     @Transactional
     public Hermes<?> doReConsumption(String serviceName) {
         Hermes<?> hermes = pop(serviceName);
-        if (log.isDebugEnabled())
-            log.info("获取到补偿消费事件：{}", hermes);
+        if (log.isDebugEnabled()) log.info("获取到补偿消费事件：{}", hermes);
         if (Objects.nonNull(hermes)) {
             EventBus.push(hermes.setGlobal(false));
         }
@@ -494,11 +533,9 @@ public class HermesRepositoryImpl implements HermesRepository {
      */
     @Override
     public void publish(Hermes<?> hermes) {
-        if (log.isDebugEnabled())
-            log.info("Publish Hermes: {}", hermes);
+        if (log.isDebugEnabled()) log.info("Publish Hermes: {}", hermes);
         // 空事件或者 不是全局事件
-        if (Objects.isNull(hermes) || !hermes.global())
-            return;
+        if (Objects.isNull(hermes) || !hermes.global()) return;
 
         Duration trigAfter = hermes.getTrigAfter();
         // 非延时事件
@@ -512,11 +549,6 @@ public class HermesRepositoryImpl implements HermesRepository {
         send2DelayedQueue(hermes, trigAfter);
     }
 
-    private void push2redis(Collection<String> ids, String type) {
-        if (!CollectionUtils.isEmpty(ids))
-            ids.forEach(id -> push2redis(id, type));
-    }
-
     private void push2redis(String id, String type) {
         // 针对性发布事件
         final String topic = "hermes:id:" + type;
@@ -527,8 +559,7 @@ public class HermesRepositoryImpl implements HermesRepository {
 
         final Long res = stringRedisTemplate.execute(callback);
 
-        if (log.isDebugEnabled())
-            log.info("Hermes Publish Result: {}", res);
+        if (log.isDebugEnabled()) log.info("Hermes Publish Result: {}", res);
     }
 
     @Override
@@ -539,62 +570,52 @@ public class HermesRepositoryImpl implements HermesRepository {
         long now = Instant.now().getEpochSecond();
         // 批量大小，限制单次处理的事件数量
         int batchSize = 100;
-        
+
         // 使用单个Lua脚本处理所有延迟事件业务逻辑
         // Use a single Lua script to handle all delayed event business logic
         List<String> keys = Collections.singletonList(delayedHermesTypes);
-        List<String> args = Arrays.asList(
-            String.valueOf(now), 
-            String.valueOf(batchSize),
-            "hermes:id:"
-        );
-        
+        List<String> args = Arrays.asList(String.valueOf(now), String.valueOf(batchSize), "hermes:id:");
+
         // 执行Lua脚本，获取处理结果
         // Execute the Lua script and get the processing results
-        List<Object> results = stringRedisTemplate.execute(
-                new DefaultRedisScript<>(completeDelayedEventProcessScript, List.class),
-                keys,
-                args.toArray()
-        );
-        
+        //noinspection rawtypes
+        List results = stringRedisTemplate.execute(new DefaultRedisScript<>(completeDelayedEventProcessScript, List.class), keys, args.toArray());
+
         // 处理返回结果
-        if (Objects.isNull(results) || results.isEmpty()) {
-            if (log.isDebugEnabled()) {
+        if (CollectionUtils.isEmpty(results)) {
+            if (log.isDebugEnabled())
                 log.debug("延迟事件处理完成: 无结果返回");
-            }
             return;
         }
-        
+
         // 解析返回结果
         try {
             // 获取已发布的事件信息
-            @SuppressWarnings("unchecked")
+            //noinspection unchecked
             List<Map<String, Object>> publishedEvents = (List<Map<String, Object>>) results.get(0);
-            
+
             // 获取空的事件类型
-            @SuppressWarnings("unchecked")
+            //noinspection unchecked
             List<String> emptyTypes = (List<String>) results.get(1);
-            
+
             // 获取总发布数量
             Long totalPublished = (Long) results.get(2);
-            
+
             // 记录处理结果
             if (log.isDebugEnabled()) {
-                log.debug("延迟事件处理完成: 发布事件数量={}, 空事件类型数量={}", 
-                    totalPublished, emptyTypes != null ? emptyTypes.size() : 0);
-                
+                log.debug("延迟事件处理完成: 发布事件数量={}, 空事件类型数量={}", totalPublished, emptyTypes != null ? emptyTypes.size() : 0);
+
                 // 记录空的事件类型
                 if (!CollectionUtils.isEmpty(emptyTypes)) {
                     log.debug("删除空的延迟事件类型: {}", emptyTypes);
                 }
-                
+
                 // 记录已发布的事件详情（仅记录前5个，避免日志过多）
                 if (!CollectionUtils.isEmpty(publishedEvents)) {
                     int logLimit = Math.min(5, publishedEvents.size());
                     for (int i = 0; i < logLimit; i++) {
                         Map<String, Object> event = publishedEvents.get(i);
-                        log.debug("发布事件: 类型={}, ID={}, 发布结果={}", 
-                            event.get("type"), event.get("id"), event.get("publishResult"));
+                        log.debug("发布事件: 类型={}, ID={}, 发布结果={}", event.get("type"), event.get("id"), event.get("publishResult"));
                     }
                     if (publishedEvents.size() > logLimit) {
                         log.debug("... 还有 {} 个事件已发布", publishedEvents.size() - logLimit);
@@ -615,7 +636,7 @@ public class HermesRepositoryImpl implements HermesRepository {
         final String delayedHermesRedisKey = "hermes:delayed:" + hermes.getType();
         // 计算执行时间的时间戳秒值
         long epochSecond = executeTime.toInstant(zoneOffset).getEpochSecond();
-        
+
         // 使用 Lua 脚本原子性地执行两个操作：
         // 1. 向延迟事件类型集合添加事件类型
         // 2. 向延迟队列添加事件ID，分数为执行时间戳
@@ -624,12 +645,7 @@ public class HermesRepositoryImpl implements HermesRepository {
         // 2. Add event ID to delayed queue with score as execution timestamp
         List<String> keys = Arrays.asList(delayedHermesTypes, delayedHermesRedisKey);
         List<String> args = Arrays.asList(hermes.getType(), hermes.getId(), String.valueOf(epochSecond));
-        
-        stringRedisTemplate.execute(
-                new DefaultRedisScript<>(send2DelayedQueueLuaScript, Long.class),
-                keys,
-                args.toArray()
-        );
-    }
 
+        stringRedisTemplate.execute(new DefaultRedisScript<>(send2DelayedQueueLuaScript, Long.class), keys, args.toArray());
+    }
 }
