@@ -547,7 +547,26 @@ public class HermesRepositoryImpl implements HermesRepository {
             final String delayedHermesRedisKey = "hermes:delayed:" + member;
 
             Set<String> ids = stringRedisTemplate.opsForZSet().rangeByScore(delayedHermesRedisKey, 0, now);
-            push2redis(ids, member);
+            //push2redis(ids, member);
+
+            if (Objects.isNull(ids) || ids.isEmpty()){
+                continue;
+            }
+
+            for (String id : ids) {
+                // 针对性发布事件
+                final String topic = "hermes:id:" + member;
+                final byte[] topicBytes = topic.getBytes(StandardCharsets.UTF_8);
+                final byte[] bodyBytes = id.getBytes(StandardCharsets.UTF_8);
+
+                final RedisCallback<Long> callback = link -> link.publish(topicBytes, bodyBytes);
+
+                final Long res = stringRedisTemplate.execute(callback);
+
+                if (log.isDebugEnabled())
+                    log.info("Hermes Publish Result: {}", res);
+            }
+
             if (!CollectionUtils.isEmpty(ids))
                 stringRedisTemplate.opsForZSet().remove(delayedHermesRedisKey, ids.toArray());
 
