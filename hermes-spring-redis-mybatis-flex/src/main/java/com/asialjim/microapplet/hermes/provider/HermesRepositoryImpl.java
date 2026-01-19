@@ -30,7 +30,6 @@ import org.apache.commons.lang3.StringUtils;
 import org.springframework.aop.framework.AopContext;
 import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.StringRedisTemplate;
-import org.springframework.data.redis.core.ZSetOperations;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
@@ -494,18 +493,9 @@ public class HermesRepositoryImpl implements HermesRepository {
         send2DelayedQueue(hermes, trigAfter);
     }
 
-    private void send2DelayedQueue(Hermes<?> hermes, Duration trigAfter) {
-        LocalDateTime executeTime = hermes.getSendTime().plusNanos(trigAfter.getNano());
-
-        // 处理延时事件
-        final String delayedHermesTypes = "hermes:delayed:types";
-        // 向   delayedHermesTypes   set 追加一个 事件类型
-        stringRedisTemplate.opsForSet().add(delayedHermesTypes, hermes.getType());
-
-        final String delayedHermesRedisKey = "hermes:delayed:" + hermes.getType();
-        // 向 delayedHermesRedisKey  zset  追加一个 hermesid, 分数为执行时间时间戳的秒值
-        long epochSecond = executeTime.toInstant(zoneOffset).getEpochSecond();
-        stringRedisTemplate.opsForZSet().add(delayedHermesRedisKey, hermes.getId(), epochSecond);
+    private void push2redis(Collection<String> ids, String type) {
+        if (!CollectionUtils.isEmpty(ids))
+            ids.forEach(id -> push2redis(id, type));
     }
 
     private void push2redis(String id, String type) {
@@ -536,14 +526,16 @@ public class HermesRepositoryImpl implements HermesRepository {
 
         for (String member : members) {
             final String delayedHermesRedisKey = "hermes:delayed:" + member;
-            if (removeIfEmptyZSet(member, delayedHermesRedisKey, willDeletedMembers))
-                continue;
 
-            // 将到达执行时间的事件转移到执行队列
-            transDelayedHermesToExecuteQueue(delayedHermesRedisKey, member, now);
+            Set<String> ids = stringRedisTemplate.opsForZSet().rangeByScore(delayedHermesRedisKey, 0, now);
+            push2redis(ids, member);
+            if (!CollectionUtils.isEmpty(ids))
+                stringRedisTemplate.opsForZSet().remove(delayedHermesRedisKey, ids.toArray());
 
             // zset 出现空值，标记好该type，供后续删除
-            removeIfEmptyZSet(member, delayedHermesRedisKey, willDeletedMembers);
+            Long count = stringRedisTemplate.opsForZSet().count(delayedHermesRedisKey, 0, Double.MAX_VALUE);
+            if (Objects.nonNull(count) && count == 0)
+                willDeletedMembers.add(member);
         }
 
         // 删除延时事件集合为空的事件类型
@@ -551,47 +543,19 @@ public class HermesRepositoryImpl implements HermesRepository {
         stringRedisTemplate.opsForSet().remove(delayedHermesTypes, array);
     }
 
-    private boolean removeIfEmptyZSet(String member, String delayedHermesRedisKey, Set<String> willDeletedMembers) {
-        Long count = stringRedisTemplate.opsForZSet().count(delayedHermesRedisKey, 0, Double.MAX_VALUE);
-        if (Objects.nonNull(count) && count == 0) {
-            // 搜集 集合已经为空的事件类型
-            willDeletedMembers.add(member);
-            return true;
-        }
-        return false;
+
+    private void send2DelayedQueue(Hermes<?> hermes, Duration trigAfter) {
+        LocalDateTime executeTime = hermes.getSendTime().plusNanos(trigAfter.getNano());
+
+        // 处理延时事件
+        final String delayedHermesTypes = "hermes:delayed:types";
+        // 向   delayedHermesTypes   set 追加一个 事件类型
+        stringRedisTemplate.opsForSet().add(delayedHermesTypes, hermes.getType());
+
+        final String delayedHermesRedisKey = "hermes:delayed:" + hermes.getType();
+        // 向 delayedHermesRedisKey  zset  追加一个 hermesid, 分数为执行时间时间戳的秒值
+        long epochSecond = executeTime.toInstant(zoneOffset).getEpochSecond();
+        stringRedisTemplate.opsForZSet().add(delayedHermesRedisKey, hermes.getId(), epochSecond);
     }
 
-    public void transDelayedHermesToExecuteQueue(String key, String type, double maxScore) {
-        ZSetOperations<String, String> zSetOps = stringRedisTemplate.opsForZSet();
-        Set<String> allMembers = new HashSet<>();
-
-        // 分页查询，避免一次取出过多数据
-        int pageSize = 100;
-        long offset = 0;
-
-        while (true) {
-            Set<ZSetOperations.TypedTuple<String>> page = zSetOps.rangeByScoreWithScores(key, Double.NEGATIVE_INFINITY, maxScore, offset, pageSize);
-
-            if (page == null || page.isEmpty()) {
-                break;
-            }
-
-            // 收集符合条件的元素
-            for (ZSetOperations.TypedTuple<String> tuple : page) {
-                if (tuple.getScore() != null && tuple.getScore() < maxScore) {
-                    String id = tuple.getValue();
-                    if (StringUtils.isNotBlank(id)) {
-                        allMembers.add(id);
-                        push2redis(id, type);
-                    }
-                }
-            }
-
-            offset += pageSize;
-        }
-
-        // 批量删除
-        if (!CollectionUtils.isEmpty(allMembers))
-            zSetOps.remove(key, (Object) allMembers.toArray(new String[0]));
-    }
 }
